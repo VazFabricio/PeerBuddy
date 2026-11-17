@@ -1,0 +1,42 @@
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-json
+      - id: check-yaml
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: detect-private-key
+
+  - repo: local
+    hooks:
+      - id: js-syntax-check
+        name: Verificar sintaxe JS (src/app.js)
+        entry: node --check src/app.js
+        language: system
+        files: ^src/.*\.js$
+        pass_filenames: false
+
+      - id: rust-fmt
+        name: Rust fmt
+        entry: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+        language: system
+        files: ^src-tauri/.*\.rs$
+        pass_filenames: false
+
+      - id: rust-clippy
+        name: Rust clippy
+        entry: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+        language: system
+        files: ^src-tauri/.*\.(rs|toml)$
+        pass_filenames: false
+
+      - id: npm-audit
+        name: NPM Audit (high)
+        entry: npm audit --audit-level=high
+        language: system
+        files: ^package(-lock)?\.json$
+        pass_filenames: false

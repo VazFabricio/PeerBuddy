@@ -1,0 +1,570 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>PeerBuddy</title>
+  <link rel="icon" type="image/png" href="logo.png" />
+  <style>
+    :root {
+      --xp-face: #ece9d8;
+      --xp-face-dark: #d4d0c8;
+      --xp-border-light: #ffffff;
+      --xp-border-mid: #aca899;
+      --xp-border-dark: #716f64;
+      --xp-blue-1: #0058ee;
+      --xp-blue-2: #3593ff;
+      --xp-blue-3: #0997ff;
+      --xp-text: #000000;
+      --xp-muted: #4a483f;
+      --ok-bg: #dff6dd;
+      --ok-border: #107c10;
+      --ok-text: #0b5a0b;
+      --warn-bg: #fff4ce;
+      --warn-border: #9d5d00;
+      --warn-text: #7a4600;
+      --err-bg: #fde7e9;
+      --err-border: #a80000;
+      --err-text: #8c0000;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: "Tahoma", "MS Sans Serif", "Segoe UI", sans-serif;
+      font-size: 12px;
+      color: var(--xp-text);
+      line-height: 1.4;
+      padding: 0;
+      min-height: 100vh;
+      background: var(--xp-face);
+      user-select: none;
+    }
+
+    /* Preenche 100% da janela nativa do app sem janela dupla */
+    .xp-window {
+      width: 100%;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      background: var(--xp-face);
+    }
+
+    .xp-body {
+      padding: 12px;
+      display: grid;
+      gap: 12px;
+      flex: 1;
+      align-content: start;
+    }
+
+    /* Banner GRANDE de status de conexão */
+    .status-banner {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      padding: 12px 16px;
+      background: #f5f4ee;
+      border: 2px solid;
+      border-color: var(--xp-border-dark) var(--xp-border-light) var(--xp-border-light) var(--xp-border-dark);
+      box-shadow: inset 1px 1px 0 var(--xp-border-mid);
+    }
+
+    .status-main {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .status-led {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: #9ca3af;
+      border: 2px solid #555;
+      box-shadow: inset 2px 2px 3px rgba(255,255,255,0.65);
+      flex-shrink: 0;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      font-size: 16px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+      border: 2px solid var(--xp-border-mid);
+      background: #e5e2d5;
+      color: #333;
+      border-radius: 3px;
+    }
+
+    .badge.ok {
+      background: var(--ok-bg);
+      border-color: var(--ok-border);
+      color: var(--ok-text);
+      font-size: 18px;
+      box-shadow: 0 0 0 1px rgba(16, 124, 16, 0.2);
+    }
+    .badge.ok::before {
+      content: "●";
+      color: #16a34a;
+      font-size: 18px;
+      line-height: 1;
+    }
+
+    .badge.warn {
+      background: var(--warn-bg);
+      border-color: var(--warn-border);
+      color: var(--warn-text);
+      font-size: 16px;
+    }
+    .badge.warn::before {
+      content: "●";
+      color: #d97706;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .badge.err {
+      background: var(--err-bg);
+      border-color: var(--err-border);
+      color: var(--err-text);
+      font-size: 16px;
+    }
+    .badge.err::before {
+      content: "●";
+      color: #dc2626;
+      font-size: 16px;
+      line-height: 1;
+    }
+
+    .badge.sec {
+      font-size: 12px;
+      padding: 5px 10px;
+      background: #e8f1ff;
+      border: 1px solid #316ac5;
+      color: #003399;
+      font-family: "Consolas", "Lucida Console", monospace;
+    }
+
+    /* Groupboxes clássicos do Windows XP */
+    fieldset.card {
+      margin: 0;
+      padding: 10px 12px 12px 12px;
+      border: 1px solid #d0ccc0;
+      box-shadow: inset 1px 1px 0 #fff, 1px 1px 0 #fff;
+      border-radius: 4px;
+      background: var(--xp-face);
+    }
+
+    fieldset.card > legend {
+      padding: 0 6px;
+      font-weight: 700;
+      font-size: 12px;
+      color: #003399;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
+      gap: 12px;
+    }
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+      gap: 8px;
+    }
+
+    .stat {
+      background: #ffffff;
+      border: 2px solid;
+      border-color: var(--xp-border-dark) var(--xp-border-light) var(--xp-border-light) var(--xp-border-dark);
+      padding: 7px 9px;
+    }
+
+    .stat-label {
+      font-size: 10px;
+      color: var(--xp-muted);
+      text-transform: uppercase;
+      font-weight: 700;
+    }
+
+    .stat-value {
+      font-size: 15px;
+      font-weight: 700;
+      margin-top: 2px;
+      color: #000;
+      font-variant-numeric: tabular-nums;
+    }
+
+    label {
+      display: block;
+      font-size: 11px;
+      font-weight: 600;
+      color: #222;
+      margin-bottom: 4px;
+    }
+
+    select, input[type="text"], input[type="password"], textarea {
+      width: 100%;
+      background: #ffffff;
+      color: #000000;
+      border: 2px solid;
+      border-color: #7f9db9 #dcd9ce #dcd9ce #7f9db9;
+      padding: 5px 7px;
+      font-size: 12px;
+      font-family: inherit;
+      user-select: text;
+    }
+
+    select:focus, input:focus, textarea:focus {
+      outline: 1px dotted #003399;
+    }
+
+    textarea {
+      font-family: "Lucida Console", "Consolas", monospace;
+      font-size: 11px;
+      resize: vertical;
+      min-height: 62px;
+    }
+
+    .row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    /* Botões clássicos 3D estilo Windows XP / 2000 */
+    button {
+      background: linear-gradient(180deg, #ffffff 0%, #ece9d8 45%, #d8d3c0 100%);
+      color: #000000;
+      border: 1px solid #003c74;
+      border-radius: 3px;
+      padding: 5px 14px;
+      font-size: 12px;
+      font-family: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: inset 0 0 0 1px rgba(255,255,255,0.8);
+    }
+
+    button:hover:not(:disabled) {
+      border-color: #e68b2c;
+      box-shadow: inset 0 0 0 2px #ffe08a;
+    }
+
+    button:active:not(:disabled) {
+      background: linear-gradient(180deg, #d4d0c8 0%, #ece9d8 100%);
+      box-shadow: inset 1px 1px 2px rgba(0,0,0,0.25);
+    }
+
+    button:disabled {
+      color: #8b897e;
+      border-color: #aca899;
+      background: #ebe8dc;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    button.secondary {
+      border-color: #716f64;
+    }
+
+    button.danger {
+      border-color: #8c0000;
+      color: #700000;
+      background: linear-gradient(180deg, #fff0f0 0%, #f3d4d4 100%);
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 400;
+      color: #000;
+      cursor: pointer;
+      margin-top: 5px;
+    }
+    .checkbox-row input { width: auto; cursor: pointer; }
+
+    /* Medidor de áudio estilo barra segmentada XP */
+    .meter-wrap {
+      height: 12px;
+      background: #ffffff;
+      border: 2px solid;
+      border-color: var(--xp-border-dark) var(--xp-border-light) var(--xp-border-light) var(--xp-border-dark);
+      margin-top: 6px;
+      padding: 1px;
+    }
+    .meter-bar {
+      height: 100%;
+      width: 0%;
+      background: repeating-linear-gradient(
+        90deg,
+        #22c55e 0px,
+        #22c55e 7px,
+        #ffffff 7px,
+        #ffffff 9px
+      );
+      transition: width 0.05s linear;
+    }
+
+    /* Moldura estilo Monitor CRT para a transmissão de tela */
+    .screen-box {
+      background: #d4d0c8;
+      border: 3px solid;
+      border-color: #fff #716f64 #716f64 #fff;
+      padding: 8px;
+      margin-top: 10px;
+      display: none;
+    }
+    .screen-box.active { display: block; }
+    .screen-box video {
+      width: 100%;
+      max-height: 480px;
+      display: block;
+      background: #000;
+      border: 2px solid;
+      border-color: #404040 #fff #fff #404040;
+    }
+    .screen-meta {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 10px;
+      flex-wrap: wrap;
+      padding: 7px 4px 2px 4px;
+      font-size: 11px;
+      color: #222;
+    }
+
+    details { font-size: 12px; color: var(--xp-muted); }
+    details summary { cursor: pointer; color: #003399; font-weight: 700; }
+    .hint { font-size: 11px; color: var(--xp-muted); margin-top: 4px; }
+
+    /* Barra de tarefas inferior nostálgica */
+    .xp-statusbar {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 4px 10px;
+      font-size: 11px;
+      color: #333;
+      background: var(--xp-face-dark);
+      border-top: 1px solid #aca899;
+    }
+  </style>
+</head>
+<body>
+  <div class="xp-window">
+    <div class="xp-body">
+      <!-- Status GRANDE de Conexão -->
+      <div class="status-banner">
+        <div class="status-main">
+          <img src="logo.png" alt="PeerBuddy" width="38" height="38" style="display:block; flex-shrink:0;" />
+          <span id="connBadge" class="badge">Desconectado</span>
+          <span id="sasBadge" class="badge sec" style="display:none;" title="Compare este código com seu colega para confirmar conexão direta">Segurança: ------</span>
+        </div>
+        <div class="hint" style="margin:0;">Prioridade: Vídeo + Áudio da Tela &gt; Voz • Criptografia DTLS-SRTP</div>
+      </div>
+
+      <!-- Telemetria -->
+      <fieldset class="card">
+        <legend>Telemetria da Rede</legend>
+        <div class="stats-grid">
+          <div class="stat">
+            <div class="stat-label">Latência (RTT)</div>
+            <div id="statRtt" class="stat-value">-- ms</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Jitter</div>
+            <div id="statJitter" class="stat-value">-- ms</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Perda de Pacotes</div>
+            <div id="statLoss" class="stat-value">--</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Voz (Recebida)</div>
+            <div id="statBitrate" class="stat-value">-- kbps</div>
+          </div>
+          <div class="stat">
+            <div class="stat-label">Tipo de Rota</div>
+            <div id="statRoute" class="stat-value" style="font-size:13px;">--</div>
+          </div>
+        </div>
+      </fieldset>
+
+      <!-- Transmissão de Tela -->
+      <fieldset class="card">
+        <legend>Transmissão de Tela (Prioridade Máxima)</legend>
+        <div class="row">
+          <div style="min-width: 195px;">
+            <label for="screenPreset">Resolução e Bitrate</label>
+            <select id="screenPreset">
+              <option value="1080p60" selected>1080p (até 12 Mbps)</option>
+              <option value="1440p60">1440p (até 20 Mbps)</option>
+              <option value="720p60">720p (até 6 Mbps)</option>
+              <option value="native60">Nativa (até 25 Mbps)</option>
+            </select>
+          </div>
+          <div style="min-width: 170px;">
+            <label for="screenMode">Tipo de conteúdo</label>
+            <select id="screenMode">
+              <option value="motion" selected>Jogo / Vídeo (60 fps)</option>
+              <option value="detail">Texto / Código (nitidez)</option>
+            </select>
+          </div>
+          <div style="min-width: 170px;">
+            <label for="screenCodec">Codec de vídeo</label>
+            <select id="screenCodec">
+              <option value="h264" selected>H.264 (hardware, leve)</option>
+              <option value="vp9">VP9 (mais nítido, mais CPU)</option>
+              <option value="av1">AV1 (melhor, GPU moderna)</option>
+            </select>
+          </div>
+          <div style="padding-top: 15px;">
+            <button id="btnShareScreen" disabled>Compartilhar Tela</button>
+            <button id="btnStopScreen" class="danger" disabled>Parar Tela</button>
+          </div>
+        </div>
+
+        <label class="checkbox-row">
+          <input type="checkbox" id="screenAudioToggle" checked />
+          <span>Incluir áudio da tela (estéreo puro, até 192 kbps, sem filtros)</span>
+        </label>
+        <div id="screenStatus" class="hint">Conecte-se primeiro para compartilhar ou assistir a tela.</div>
+
+        <div id="remoteScreenBox" class="screen-box">
+          <video id="remoteVideo" autoplay playsinline></video>
+          <div class="screen-meta">
+            <span id="videoStatsText">Aguardando vídeo...</span>
+            <div class="row">
+              <label for="screenVolume" style="margin:0;">Volume da Tela:</label>
+              <input id="screenVolume" type="range" min="0" max="1" step="0.05" value="1" style="width:110px;" />
+              <button id="btnFullscreen" class="secondary">Tela Cheia</button>
+            </div>
+          </div>
+        </div>
+      </fieldset>
+
+      <!-- Controles de Voz -->
+      <fieldset class="card">
+        <legend>Microfone e Saída de Áudio</legend>
+        <div class="grid-2">
+          <div>
+            <label for="micSelect">Microfone</label>
+            <select id="micSelect"></select>
+            <div class="meter-wrap" title="Nível do microfone">
+              <div id="micMeter" class="meter-bar"></div>
+            </div>
+          </div>
+          <div>
+            <label for="speakerSelect">Saída de Áudio</label>
+            <select id="speakerSelect"></select>
+            <div class="row" style="margin-top: 7px;">
+              <label for="remoteVolume" style="margin:0;">Volume da Voz:</label>
+              <input id="remoteVolume" type="range" min="0" max="1" step="0.05" value="1" style="flex:1;" />
+            </div>
+          </div>
+        </div>
+
+        <div class="row" style="gap: 16px; margin-top: 4px;">
+          <label class="checkbox-row">
+            <input type="checkbox" id="rawAudioToggle" checked />
+            <span>Modo Ultra-Baixa Latência (sem filtros de eco/ruído)</span>
+          </label>
+          <label class="checkbox-row">
+            <input type="checkbox" id="ptime10Toggle" />
+            <span>Pacotes 10 ms (padrão 20 ms evita perda)</span>
+          </label>
+        </div>
+
+        <div class="row" style="margin-top: 10px;">
+          <button id="btnStartMic">Ativar Microfone</button>
+          <button id="btnMute" class="secondary" disabled>Mutar (M)</button>
+          <button id="btnHangup" class="danger" disabled>Desconectar</button>
+        </div>
+        <div id="audioStatus" class="hint">Ative o microfone antes de gerar ou aceitar um convite.</div>
+      </fieldset>
+
+      <!-- Conexão P2P -->
+      <div class="grid-2">
+        <fieldset class="card">
+          <legend>Lado A — Criar Convite (Host)</legend>
+          <div class="row" style="margin-bottom: 8px;">
+            <button id="btnCreateOffer" disabled>1. Gerar Convite</button>
+            <button id="btnCopyOffer" class="secondary" disabled>Copiar Convite</button>
+          </div>
+          <label for="offerOut">Código compacto (envie para o colega):</label>
+          <textarea id="offerOut" readonly placeholder="Clique em '1. Gerar Convite'..."></textarea>
+
+          <label for="answerIn" style="margin-top: 8px;">Cole a resposta do colega aqui:</label>
+          <textarea id="answerIn" placeholder="Cole o código CV1:... aqui"></textarea>
+          <div class="row" style="margin-top: 8px;">
+            <button id="btnAcceptAnswer" disabled>3. Conectar</button>
+          </div>
+        </fieldset>
+
+        <fieldset class="card">
+          <legend>Lado B — Entrar com Convite</legend>
+          <label for="offerIn">Cole o convite do colega aqui:</label>
+          <textarea id="offerIn" placeholder="Cole o código CV1:... aqui"></textarea>
+          <div class="row" style="margin: 8px 0;">
+            <button id="btnCreateAnswer" disabled>2. Gerar Resposta</button>
+            <button id="btnCopyAnswer" class="secondary" disabled>Copiar Resposta</button>
+          </div>
+          <label for="answerOut">Sua resposta (envie de volta):</label>
+          <textarea id="answerOut" readonly placeholder="Sua resposta aparecerá aqui..."></textarea>
+        </fieldset>
+      </div>
+
+      <!-- Opções Avançadas -->
+      <fieldset class="card">
+        <legend>Rede Avançada</legend>
+        <details>
+          <summary>Opções de STUN / TURN (opcional)</summary>
+          <div class="hint" style="margin-bottom: 8px;">
+            Usa STUN gratuito (Google + Cloudflare) para conexão 100% P2P direta. Só preencha TURN se algum colega estiver em rede bloqueada.
+          </div>
+          <div class="grid-2">
+            <div>
+              <label for="turnUrl">TURN URI (opcional)</label>
+              <input id="turnUrl" type="text" placeholder="ex: turn:seu-turn.com:3478" />
+            </div>
+            <div class="row">
+              <div style="flex:1;">
+                <label for="turnUser">Usuário TURN</label>
+                <input id="turnUser" type="text" />
+              </div>
+              <div style="flex:1;">
+                <label for="turnPass">Senha TURN</label>
+                <input id="turnPass" type="password" />
+              </div>
+            </div>
+          </div>
+        </details>
+      </fieldset>
+    </div>
+
+    <div class="xp-statusbar">
+      <span class="row" style="gap:6px;">
+        <img src="logo.png" alt="" width="15" height="15" style="display:block;" />
+        <span>PeerBuddy • Modo Seguro Isolado</span>
+      </span>
+      <span>WebRTC DTLS-SRTP • Opus + H.264/VP9/AV1</span>
+    </div>
+  </div>
+
+  <audio id="remoteAudio" autoplay playsinline></audio>
+  <script src="app.js"></script>
+</body>
+</html>

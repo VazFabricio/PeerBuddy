@@ -1,0 +1,33 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "PeerBuddy",
+  "version": "0.1.0",
+  "identifier": "com.peerbuddy.app",
+  "build": {
+    "frontendDist": "../src"
+  },
+  "app": {
+    "withGlobalTauri": false,
+    "windows": [
+      {
+        "title": "PeerBuddy",
+        "width": 980,
+        "height": 820,
+        "minWidth": 680,
+        "minHeight": 580,
+        "resizable": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; connect-src 'self'; media-src 'self' mediastream: blob:; img-src 'self' data:"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis", "msi"],
+    "icon": [
+      "icons/icon.png",
+      "icons/icon.ico"
+    ]
+  }
+}

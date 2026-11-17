@@ -1,0 +1,23 @@
+[package]
+name = "peerbuddy"
+version = "0.1.0"
+description = "PeerBuddy — App desktop P2P leve focado em transmissão de tela e áudio"
+authors = ["PeerBuddy"]
+edition = "2021"
+
+[lib]
+name = "peerbuddy_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
