@@ -1,6 +1,6 @@
 {
   "name": "peerbuddy",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "description": "PeerBuddy — App desktop P2P leve focado em transmissão de tela e áudio com baixa latência e isolamento",
   "scripts": {
