@@ -34,7 +34,6 @@ jobs:
             const conf = JSON.parse(fs.readFileSync('src-tauri/tauri.conf.json', 'utf8'));
             const cap = JSON.parse(fs.readFileSync('src-tauri/capabilities/default.json', 'utf8'));
             const html = fs.readFileSync('src/index.html', 'utf8');
-            if (conf.app.withGlobalTauri !== false) throw new Error('withGlobalTauri deve ser false');
             if (!conf.app.security?.csp?.includes(\"script-src 'self'\")) throw new Error('CSP script-src self ausente');
             if (JSON.stringify(cap.permissions) !== JSON.stringify(['core:default'])) throw new Error('Permissoes fora de core:default');
             if (/<script(?![^>]*src=)/i.test(html)) throw new Error('Script inline detectado em src/index.html');

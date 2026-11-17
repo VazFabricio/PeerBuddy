@@ -49,6 +49,10 @@ let localStream = null;
 let screenStream = null;
 let screenSenders = [];
 let voiceSender = null;
+let remoteVoiceTrack = null;
+let remoteScreenStream = null;
+let wasapiAudioCtx = null;
+let wasapiTrack = null;
 let pc = null;
 let signalChannel = null;
 let isPolite = false;
@@ -81,8 +85,37 @@ function fromBase64Url(str) {
   return bytes;
 }
 
+// Remove codecs de áudio não usados (mantém apenas Opus) e candidatos TCP para reduzir o tamanho do CV1
+function compactSdp(sdp) {
+  const opusMatch = sdp.match(/a=rtpmap:(\d+)\s+opus\/48000/i);
+  const opusPt = opusMatch ? opusMatch[1] : null;
+  const lines = sdp.split(/\r?\n/);
+  const out = [];
+
+  for (const line of lines) {
+    if (!line) continue;
+    // Remove candidatos TCP (usamos apenas UDP P2P)
+    if (line.startsWith('a=candidate:') && /\s+tcp\s+/i.test(line)) continue;
+
+    if (opusPt) {
+      if (line.startsWith('m=audio ')) {
+        const parts = line.split(' ');
+        if (parts.length >= 4) {
+          out.push(`${parts[0]} ${parts[1]} ${parts[2]} ${opusPt}`);
+          continue;
+        }
+      }
+      const ptMatch = line.match(/^a=(?:rtpmap|fmtp|rtcp-fb):(\d+)\s/);
+      if (ptMatch && ptMatch[1] !== opusPt) continue;
+    }
+    out.push(line);
+  }
+  return out.join('\r\n') + '\r\n';
+}
+
 async function encodeSignal(desc) {
-  const compact = JSON.stringify({ t: desc.type === 'offer' ? 'o' : 'a', s: desc.sdp });
+  const sdp = compactSdp(desc.sdp);
+  const compact = JSON.stringify({ t: desc.type === 'offer' ? 'o' : 'a', s: sdp });
   const rawBytes = new TextEncoder().encode(compact);
   if (typeof CompressionStream !== 'undefined') {
     const cs = new CompressionStream('deflate-raw');
@@ -275,6 +308,7 @@ function setupDataChannel(ch) {
       const msg = JSON.parse(ev.data);
       if (msg.type === 'screen-stopped') {
         els.remoteVideo.srcObject = null;
+        remoteScreenStream = null;
         els.remoteScreenBox.classList.remove('active');
         return;
       }
@@ -352,12 +386,14 @@ function createPeerConnection(polite) {
 
   pc.ontrack = (event) => {
     const track = event.track;
-    const stream = event.streams[0];
     tuneReceiver(event.receiver, track.kind);
 
     if (track.kind === 'video') {
-      // Vídeo + áudio da transmissão ficam juntos no remoteVideo (volume independente da voz)
-      els.remoteVideo.srcObject = stream || new MediaStream([track]);
+      if (!remoteScreenStream) remoteScreenStream = new MediaStream();
+      remoteScreenStream.getVideoTracks().forEach((t) => remoteScreenStream.removeTrack(t));
+      remoteScreenStream.addTrack(track);
+
+      els.remoteVideo.srcObject = remoteScreenStream;
       els.remoteVideo.volume = parseFloat(els.screenVolume.value);
       els.remoteScreenBox.classList.add('active');
       if (els.speakerSelect.value && typeof els.remoteVideo.setSinkId === 'function') {
@@ -365,20 +401,25 @@ function createPeerConnection(polite) {
       }
       track.onended = () => {
         els.remoteVideo.srcObject = null;
+        remoteScreenStream = null;
         els.remoteScreenBox.classList.remove('active');
       };
     } else if (track.kind === 'audio') {
-      // Primeiro stream de áudio é a voz; se vier um áudio extra com vídeo, vai junto no remoteVideo
-      const hasVideo = stream && stream.getVideoTracks().length > 0;
-      if (hasVideo) {
-        els.remoteVideo.srcObject = stream;
-        els.remoteVideo.volume = parseFloat(els.screenVolume.value);
-      } else {
-        els.remoteAudio.srcObject = stream || new MediaStream([track]);
+      // O primeiro áudio recebido na conexão é sempre a voz do microfone;
+      // áudios extras que chegam depois são da transmissão de tela e nunca sobrescrevem a voz.
+      if (!remoteVoiceTrack || remoteVoiceTrack.id === track.id || remoteVoiceTrack.readyState === 'ended') {
+        remoteVoiceTrack = track;
+        els.remoteAudio.srcObject = new MediaStream([track]);
         els.remoteAudio.volume = parseFloat(els.remoteVolume.value);
         if (els.speakerSelect.value && typeof els.remoteAudio.setSinkId === 'function') {
           els.remoteAudio.setSinkId(els.speakerSelect.value).catch(() => {});
         }
+      } else {
+        if (!remoteScreenStream) remoteScreenStream = new MediaStream();
+        remoteScreenStream.getAudioTracks().forEach((t) => remoteScreenStream.removeTrack(t));
+        remoteScreenStream.addTrack(track);
+        els.remoteVideo.srcObject = remoteScreenStream;
+        els.remoteVideo.volume = parseFloat(els.screenVolume.value);
       }
     }
   };
@@ -414,6 +455,50 @@ function waitForIceGathering(peer, timeoutMs = 3000) {
   });
 }
 
+async function startWasapiLoopbackAudio() {
+  const tauriCore = window.__TAURI__?.core;
+  if (!tauriCore?.invoke || !tauriCore?.Channel) return null;
+
+  const ctx = new AudioContext({ sampleRate: 48000, latencyHint: 'playback' });
+  await ctx.audioWorklet.addModule('loopback-worklet.js');
+  const node = new AudioWorkletNode(ctx, 'wasapi-loopback-processor', {
+    numberOfInputs: 0,
+    numberOfOutputs: 1,
+    outputChannelCount: [2],
+  });
+  const dest = ctx.createMediaStreamDestination();
+  node.connect(dest);
+
+  const ch = new tauriCore.Channel();
+  ch.onmessage = (rawBytes) => {
+    const u8 = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes);
+    if (u8.byteLength >= 8) {
+      const f32 = new Float32Array(u8.buffer, u8.byteOffset, Math.floor(u8.byteLength / 4));
+      node.port.postMessage(f32);
+    }
+  };
+
+  await tauriCore.invoke('start_screen_audio', { onAudio: ch });
+  wasapiAudioCtx = ctx;
+  wasapiTrack = dest.stream.getAudioTracks()[0];
+  return wasapiTrack;
+}
+
+function stopWasapiLoopbackAudio() {
+  if (wasapiTrack) {
+    try { wasapiTrack.stop(); } catch {}
+    wasapiTrack = null;
+  }
+  if (wasapiAudioCtx) {
+    wasapiAudioCtx.close().catch(() => {});
+    wasapiAudioCtx = null;
+  }
+  const tauriCore = window.__TAURI__?.core;
+  if (tauriCore?.invoke) {
+    tauriCore.invoke('stop_screen_audio').catch(() => {});
+  }
+}
+
 async function shareScreen() {
   try {
     const preset = els.screenPreset.value;
@@ -426,14 +511,29 @@ async function shareScreen() {
         ? { width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 60 } }
         : { frameRate: { ideal: 60 } };
 
-    const audioConstraints = els.screenAudioToggle.checked
-      ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
-      : false;
+    // Tenta captura WASAPI nativa (exclui o áudio do próprio PeerBuddy para não dar eco no colega)
+    let nativeAudioTrack = null;
+    if (els.screenAudioToggle.checked) {
+      try {
+        nativeAudioTrack = await startWasapiLoopbackAudio();
+      } catch {
+        stopWasapiLoopbackAudio();
+      }
+    }
+
+    const audioConstraints =
+      els.screenAudioToggle.checked && !nativeAudioTrack
+        ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
+        : false;
 
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: videoConstraints,
       audio: audioConstraints,
     });
+
+    if (nativeAudioTrack) {
+      screenStream.addTrack(nativeAudioTrack);
+    }
 
     // Modo "detail" prioriza nitidez (texto/código); "motion" prioriza fluidez (jogo/vídeo)
     const mode = els.screenMode.value;
@@ -468,6 +568,7 @@ async function shareScreen() {
     els.btnStopScreen.disabled = false;
     els.screenStatus.textContent = 'Transmitindo tela com prioridade máxima (Vídeo + Áudio da Tela).';
   } catch (err) {
+    stopWasapiLoopbackAudio();
     if (err.name !== 'NotAllowedError') {
       els.screenStatus.textContent = 'Erro ao compartilhar tela: ' + err.message;
     }
@@ -475,6 +576,7 @@ async function shareScreen() {
 }
 
 function stopScreenShare() {
+  stopWasapiLoopbackAudio();
   if (screenStream) {
     screenStream.getTracks().forEach((t) => t.stop());
     screenStream = null;
@@ -591,6 +693,8 @@ function hangup() {
   }
   signalChannel = null;
   voiceSender = null;
+  remoteVoiceTrack = null;
+  remoteScreenStream = null;
   els.remoteAudio.srcObject = null;
   els.remoteVideo.srcObject = null;
   els.remoteScreenBox.classList.remove('active');
