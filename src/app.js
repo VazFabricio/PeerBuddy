@@ -53,6 +53,9 @@ let remoteVoiceTrack = null;
 let remoteScreenStream = null;
 let wasapiAudioCtx = null;
 let wasapiTrack = null;
+let wasConnected = false;
+let iceRestartTimer = null;
+let keepAliveTimer = null;
 let pc = null;
 let signalChannel = null;
 let isPolite = false;
@@ -78,11 +81,37 @@ function toBase64Url(bytes) {
 }
 
 function fromBase64Url(str) {
-  const b64 = str.replace(/-/g, '+').replace(/_/g, '/') + '==='.slice((str.length + 3) % 4);
+  const clean = str.replace(/[^A-Za-z0-9\-_]/g, '');
+  const pad = (4 - (clean.length % 4)) % 4;
+  const b64 = clean.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(pad);
   const bin = atob(b64);
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   return bytes;
+}
+
+// Som leve sintetizado via Web Audio API (0 bytes extras)
+function playStatusSound(kind) {
+  try {
+    const ctx = new AudioContext();
+    const notes = kind === 'connect' ? [523.25, 659.25, 783.99] : [440, 329.63];
+    const now = ctx.currentTime;
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const t0 = now + idx * 0.085;
+      gain.gain.setValueAtTime(0.0001, t0);
+      gain.gain.exponentialRampToValueAtTime(0.08, t0 + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.16);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + 0.17);
+    });
+    setTimeout(() => ctx.close().catch(() => {}), 600);
+  } catch {}
 }
 
 // Remove codecs de áudio não usados (mantém apenas Opus) e candidatos TCP para reduzir o tamanho do CV1
@@ -129,7 +158,7 @@ async function encodeSignal(desc) {
 }
 
 async function decodeSignal(input) {
-  const str = input.trim();
+  const str = input.replace(/\s+/g, '');
   if (str.startsWith('CV1:')) {
     const bytes = fromBase64Url(str.slice(4));
     const ds = new DecompressionStream('deflate-raw');
@@ -302,10 +331,18 @@ function setupDataChannel(ch) {
   ch.onopen = () => {
     els.btnShareScreen.disabled = false;
     els.screenStatus.textContent = 'Pronto! Você pode compartilhar a tela com prioridade máxima.';
+    if (keepAliveTimer) clearInterval(keepAliveTimer);
+    // Keep-alive leve a cada 5s para evitar que roteadores fechem a porta UDP por inatividade
+    keepAliveTimer = setInterval(() => {
+      if (ch.readyState === 'open') {
+        try { ch.send(JSON.stringify({ type: 'ping' })); } catch {}
+      }
+    }, 5000);
   };
   ch.onmessage = async (ev) => {
     try {
       const msg = JSON.parse(ev.data);
+      if (msg.type === 'ping') return;
       if (msg.type === 'screen-stopped') {
         els.remoteVideo.srcObject = null;
         remoteScreenStream = null;
@@ -426,15 +463,40 @@ function createPeerConnection(polite) {
 
   pc.oniceconnectionstatechange = () => {
     const s = pc.iceConnectionState;
-    if (s === 'checking') setBadge('Conectando P2P...', 'warn');
-    else if (s === 'connected' || s === 'completed') {
+    if (s === 'checking') {
+      setBadge('Conectando P2P...', 'warn');
+    } else if (s === 'connected' || s === 'completed') {
+      if (iceRestartTimer) {
+        clearTimeout(iceRestartTimer);
+        iceRestartTimer = null;
+      }
+      if (!wasConnected) {
+        wasConnected = true;
+        playStatusSound('connect');
+      }
       setBadge('Conectado P2P', 'ok');
       els.btnHangup.disabled = false;
       updateSasCode().catch(() => {});
       startStatsLoop();
-    } else if (s === 'disconnected' || s === 'failed') {
+    } else if (s === 'disconnected') {
+      setBadge('Oscilação na rede — tentando recuperar...', 'warn');
+      // Se não voltar sozinho em 3.5s, o Host tenta ICE Restart automático pelo DataChannel
+      if (!isPolite && !iceRestartTimer) {
+        iceRestartTimer = setTimeout(() => {
+          iceRestartTimer = null;
+          if (pc && pc.iceConnectionState === 'disconnected' && signalChannel?.readyState === 'open') {
+            try { pc.restartIce(); } catch {}
+          }
+        }, 3500);
+      }
+    } else if (s === 'failed') {
+      if (wasConnected) {
+        wasConnected = false;
+        playStatusSound('disconnect');
+      }
       setBadge('Conexão perdida / Falhou', 'err');
     } else if (s === 'closed') {
+      wasConnected = false;
       setBadge('Desconectado', '');
     }
   };
@@ -686,7 +748,11 @@ function startStatsLoop() {
 function hangup() {
   stopScreenShare();
   if (statsTimer) clearInterval(statsTimer);
+  if (iceRestartTimer) clearTimeout(iceRestartTimer);
+  if (keepAliveTimer) clearInterval(keepAliveTimer);
   statsTimer = null;
+  iceRestartTimer = null;
+  keepAliveTimer = null;
   if (pc) {
     pc.close();
     pc = null;
@@ -695,6 +761,7 @@ function hangup() {
   voiceSender = null;
   remoteVoiceTrack = null;
   remoteScreenStream = null;
+  wasConnected = false;
   els.remoteAudio.srcObject = null;
   els.remoteVideo.srcObject = null;
   els.remoteScreenBox.classList.remove('active');
