@@ -89,8 +89,8 @@ Ao clicar em **Desconectar** ou fechar a janela:
 ## Downloads (GitHub Releases)
 Na aba **Releases** deste repositório estão disponíveis os 3 formatos compilados diretamente a partir deste código:
 1. **`peerbuddy.exe`** — Executável único portátil (basta abrir, não instala nada).
-2. **`PeerBuddy_0.1.3_x64-setup.exe`** — Instalador tradicional do Windows (NSIS).
-3. **`PeerBuddy_0.1.3_x64_en-US.msi`** — Instalador MSI.
+2. **`PeerBuddy_0.1.4_x64-setup.exe`** — Instalador tradicional do Windows (NSIS).
+3. **`PeerBuddy_0.1.4_x64_en-US.msi`** — Instalador MSI.
 
 *(Nota sobre o Windows SmartScreen: como o binário não possui certificado comercial pago, na primeira execução o Windows pode exibir "Mais informações -> Executar assim mesmo". Todo o código-fonte está aberto aqui para auditoria).*
 

@@ -60,6 +60,8 @@ let pc = null;
 let signalChannel = null;
 let isPolite = false;
 let makingOffer = false;
+let suppressNegotiation = false;
+let pendingNegotiation = false;
 let isMuted = false;
 let statsTimer = null;
 let meterRaf = null;
@@ -198,14 +200,23 @@ async function updateSasCode() {
 }
 
 // Opus em modo de alta fidelidade: estéreo + até 192 kbps para o áudio da tela.
-// O microfone (mono) é limitado a 32 kbps no sender, então não consome banda extra.
-// DTX desligado para nunca cortar início/fim de sons do vídeo/jogo.
+// E no vídeo define bitrate inicial alto (6 Mbps) e piso mínimo alto (3.5 Mbps) para manter 1080p sempre nítido.
 function tuneOpusSdp(sdp) {
   const ptime = els.ptime10Toggle.checked ? 10 : 20;
-  return sdp.replace(
+  let out = sdp.replace(
     /a=fmtp:(\d+) (.*minptime=.*)/g,
     `a=fmtp:$1 minptime=${ptime};useinbandfec=1;usedtx=0;stereo=1;sprop-stereo=1;maxaveragebitrate=192000`
   );
+  if (out.includes('m=video')) {
+    out = out.replace(
+      /a=fmtp:(\d+) ((?:(?!minptime).)*)$/gm,
+      (line, pt, params) =>
+        params.includes('x-google-start-bitrate')
+          ? line
+          : `a=fmtp:${pt} ${params};x-google-start-bitrate=6000;x-google-min-bitrate=3500;x-google-max-bitrate=20000`
+    );
+  }
+  return out;
 }
 
 // Ordem de codecs de vídeo: H.264 (encoder por hardware em Intel/AMD/NVIDIA, cai p/ CPU se não houver),
@@ -225,11 +236,16 @@ function preferVideoCodec(sender, choice) {
   }
 }
 
-// Receptor: buffer de jitter moderado favorece imagem/áudio contínuos (sem engasgos)
-function tuneReceiver(receiver, kind) {
+// Receptor: casamento exato de 300ms totais para vídeo (300ms) e áudio da tela (80ms local + 220ms receptor = 300ms),
+// garantindo sincronia labial e tempo para retransmissão NACK sem engasgar. Voz do microfone fica em 50ms.
+function tuneReceiver(receiver, kind, isScreen) {
   try {
     if ('jitterBufferTarget' in receiver) {
-      receiver.jitterBufferTarget = kind === 'video' ? 60 : 80;
+      if (!isScreen) {
+        receiver.jitterBufferTarget = 50;
+      } else {
+        receiver.jitterBufferTarget = kind === 'video' ? 300 : 220;
+      }
     }
   } catch {}
 }
@@ -361,6 +377,9 @@ function setupDataChannel(ch) {
           answer.sdp = tuneOpusSdp(answer.sdp);
           await pc.setLocalDescription(answer);
           ch.send(JSON.stringify({ description: pc.localDescription }));
+        } else if (pendingNegotiation) {
+          pendingNegotiation = false;
+          negotiateNow().catch(() => {});
         }
       } else if (msg.candidate) {
         await pc.addIceCandidate(msg.candidate).catch(() => {});
@@ -402,17 +421,9 @@ function createPeerConnection(polite) {
     };
   }
 
-  pc.onnegotiationneeded = async () => {
-    if (!signalChannel || signalChannel.readyState !== 'open') return;
-    try {
-      makingOffer = true;
-      const offer = await pc.createOffer();
-      offer.sdp = tuneOpusSdp(offer.sdp);
-      await pc.setLocalDescription(offer);
-      signalChannel.send(JSON.stringify({ description: pc.localDescription }));
-    } finally {
-      makingOffer = false;
-    }
+  pc.onnegotiationneeded = () => {
+    if (suppressNegotiation) return;
+    negotiateNow().catch(() => {});
   };
 
   pc.onicecandidate = (ev) => {
@@ -423,9 +434,9 @@ function createPeerConnection(polite) {
 
   pc.ontrack = (event) => {
     const track = event.track;
-    tuneReceiver(event.receiver, track.kind);
 
     if (track.kind === 'video') {
+      tuneReceiver(event.receiver, 'video', true);
       if (!remoteScreenStream) remoteScreenStream = new MediaStream();
       remoteScreenStream.getVideoTracks().forEach((t) => remoteScreenStream.removeTrack(t));
       remoteScreenStream.addTrack(track);
@@ -445,6 +456,7 @@ function createPeerConnection(polite) {
       // O primeiro áudio recebido na conexão é sempre a voz do microfone;
       // áudios extras que chegam depois são da transmissão de tela e nunca sobrescrevem a voz.
       if (!remoteVoiceTrack || remoteVoiceTrack.id === track.id || remoteVoiceTrack.readyState === 'ended') {
+        tuneReceiver(event.receiver, 'audio', false);
         remoteVoiceTrack = track;
         els.remoteAudio.srcObject = new MediaStream([track]);
         els.remoteAudio.volume = parseFloat(els.remoteVolume.value);
@@ -452,6 +464,7 @@ function createPeerConnection(polite) {
           els.remoteAudio.setSinkId(els.speakerSelect.value).catch(() => {});
         }
       } else {
+        tuneReceiver(event.receiver, 'audio', true);
         if (!remoteScreenStream) remoteScreenStream = new MediaStream();
         remoteScreenStream.getAudioTracks().forEach((t) => remoteScreenStream.removeTrack(t));
         remoteScreenStream.addTrack(track);
@@ -504,6 +517,25 @@ function createPeerConnection(polite) {
   return pc;
 }
 
+async function negotiateNow() {
+  if (!pc || !signalChannel || signalChannel.readyState !== 'open') return;
+  if (makingOffer || pc.signalingState !== 'stable') {
+    pendingNegotiation = true;
+    return;
+  }
+  try {
+    makingOffer = true;
+    const offer = await pc.createOffer();
+    offer.sdp = tuneOpusSdp(offer.sdp);
+    await pc.setLocalDescription(offer);
+    signalChannel.send(JSON.stringify({ description: pc.localDescription }));
+  } catch (err) {
+    console.error('Falha ao negociar:', err);
+  } finally {
+    makingOffer = false;
+  }
+}
+
 function waitForIceGathering(peer, timeoutMs = 3000) {
   return new Promise((resolve) => {
     if (peer.iceGatheringState === 'complete') return resolve();
@@ -532,12 +564,18 @@ async function startWasapiLoopbackAudio() {
   node.connect(dest);
 
   const ch = new tauriCore.Channel();
-  ch.onmessage = (rawBytes) => {
-    const u8 = rawBytes instanceof Uint8Array ? rawBytes : new Uint8Array(rawBytes);
-    if (u8.byteLength >= 8) {
-      const f32 = new Float32Array(u8.buffer, u8.byteOffset, Math.floor(u8.byteLength / 4));
-      node.port.postMessage(f32);
+  ch.onmessage = (b64) => {
+    if (typeof b64 !== 'string' || b64.length < 4) return;
+    const bin = atob(b64);
+    const len = bin.length;
+    const samples = len >> 1;
+    const f32 = new Float32Array(samples);
+    for (let i = 0; i < samples; i++) {
+      let s = bin.charCodeAt(i * 2) | (bin.charCodeAt(i * 2 + 1) << 8);
+      if (s >= 0x8000) s -= 0x10000;
+      f32[i] = s / 32768;
     }
+    node.port.postMessage(f32);
   };
 
   await tauriCore.invoke('start_screen_audio', { onAudio: ch });
@@ -573,28 +611,30 @@ async function shareScreen() {
         ? { width: { ideal: 2560 }, height: { ideal: 1440 }, frameRate: { ideal: 60 } }
         : { frameRate: { ideal: 60 } };
 
-    // Tenta captura WASAPI nativa (exclui o áudio do próprio PeerBuddy para não dar eco no colega)
-    let nativeAudioTrack = null;
-    if (els.screenAudioToggle.checked) {
-      try {
-        nativeAudioTrack = await startWasapiLoopbackAudio();
-      } catch {
-        stopWasapiLoopbackAudio();
-      }
-    }
-
-    const audioConstraints =
-      els.screenAudioToggle.checked && !nativeAudioTrack
+    const isTauriApp = Boolean(window.__TAURI__?.core?.invoke);
+    const fallbackAudioConstraints =
+      els.screenAudioToggle.checked && !isTauriApp
         ? { echoCancellation: false, noiseSuppression: false, autoGainControl: false }
         : false;
 
+    // 1. Pede o vídeo da tela primeiro (no app desktop força audio:false no seletor para o WebView2
+    //    nunca capturar o áudio global com a voz do colega).
     screenStream = await navigator.mediaDevices.getDisplayMedia({
       video: videoConstraints,
-      audio: audioConstraints,
+      audio: fallbackAudioConstraints,
     });
 
-    if (nativeAudioTrack) {
-      screenStream.addTrack(nativeAudioTrack);
+    // 2. Depois que o usuário escolheu a tela, inicia o WASAPI Process Loopback (que exclui o PID de áudio do WebView2)
+    if (els.screenAudioToggle.checked && isTauriApp) {
+      try {
+        const nativeAudioTrack = await startWasapiLoopbackAudio();
+        if (nativeAudioTrack) {
+          screenStream.addTrack(nativeAudioTrack);
+        }
+      } catch (wErr) {
+        stopWasapiLoopbackAudio();
+        console.warn('WASAPI loopback indisponível:', wErr);
+      }
     }
 
     // Modo "detail" prioriza nitidez (texto/código); "motion" prioriza fluidez (jogo/vídeo)
@@ -610,21 +650,34 @@ async function shareScreen() {
       : 25_000_000;
 
     screenSenders = [];
-    for (const track of screenStream.getTracks()) {
-      const sender = pc.addTrack(track, screenStream);
-      if (track.kind === 'video') {
-        preferVideoCodec(sender, els.screenCodec.value);
+    suppressNegotiation = true;
+    try {
+      for (const track of screenStream.getTracks()) {
+        const sender = pc.addTrack(track, screenStream);
+        if (track.kind === 'video') {
+          preferVideoCodec(sender, els.screenCodec.value);
+        }
+        screenSenders.push(sender);
+      }
+    } finally {
+      suppressNegotiation = false;
+    }
+
+    for (const sender of screenSenders) {
+      if (sender.track?.kind === 'video') {
         await applySenderPriority(sender, 'high', {
           maxBitrate,
           maxFramerate: mode === 'detail' ? 30 : 60,
-          scaleResolutionDownBy: 1.0, // nunca reduzir resolução por conta própria
-          degradationPreference: mode === 'detail' ? 'maintain-resolution' : 'maintain-framerate',
+          scaleResolutionDownBy: 1.0,
+          // maintain-resolution trava a resolução escolhida (ex: 1080p) para o WebRTC nunca derrubar para 720p/540p
+          degradationPreference: 'maintain-resolution',
         });
-      } else if (track.kind === 'audio') {
+      } else if (sender.track?.kind === 'audio') {
         await applySenderPriority(sender, 'high', { maxBitrate: 192_000 });
       }
-      screenSenders.push(sender);
     }
+
+    await negotiateNow();
 
     els.btnShareScreen.disabled = true;
     els.btnStopScreen.disabled = false;
@@ -644,10 +697,16 @@ function stopScreenShare() {
     screenStream = null;
   }
   if (pc && screenSenders.length) {
-    screenSenders.forEach((s) => {
-      try { pc.removeTrack(s); } catch {}
-    });
+    suppressNegotiation = true;
+    try {
+      screenSenders.forEach((s) => {
+        try { pc.removeTrack(s); } catch {}
+      });
+    } finally {
+      suppressNegotiation = false;
+    }
     screenSenders = [];
+    negotiateNow().catch(() => {});
   }
   if (signalChannel && signalChannel.readyState === 'open') {
     signalChannel.send(JSON.stringify({ type: 'screen-stopped' }));

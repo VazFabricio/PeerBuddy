@@ -7,8 +7,8 @@ use tauri::State;
 #[tauri::command]
 fn start_screen_audio(
     state: State<'_, LoopbackState>,
-    on_audio: Channel<Vec<u8>>,
-) -> Result<(), String> {
+    on_audio: Channel<String>,
+) -> Result<u32, String> {
     state.start(on_audio)
 }
 
